@@ -1,0 +1,13 @@
+{
+  "name": "ddd-wiring-example",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node main.js js ORDER-001 book:2 pen:3",
+    "start:lisp": "node main.js lisp ORDER-001 book:2 pen:3",
+    "test": "node --test",
+    "scaffold": "node scaffold.js architecture.js",
+    "scaffold:lisp": "node scaffold.js architecture.lisp",
+    "watch": "node scaffold.js architecture.js --watch"
+  }
+}

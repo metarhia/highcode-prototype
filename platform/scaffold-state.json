@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "components": {
+    "domain.aggregate": "domain/orderAggregate.js",
+    "infrastructure.products": "infrastructure/memoryCatalog.js",
+    "infrastructure.orderStore": "infrastructure/memoryOrders.js",
+    "application.purchase": "application/placeOrder.js",
+    "presentation.terminal": "presentation/commandLine.js"
+  },
+  "architecture": {
+    "path": "architecture.lisp",
+    "hash": "b158d3edf9894a5a5c18837147d729fe6b8545aed61186dc4faf3463b6f139bf"
+  }
+}
