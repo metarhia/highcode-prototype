@@ -1,2 +1,1 @@
-# highcode-prototype
-High-code application prototype 🧑‍💻
+# High-code application prototype

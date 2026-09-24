@@ -1,0 +1,28 @@
+{
+  "domain/orderAggregate.js": {
+    "layer": "domain",
+    "ports": []
+  },
+  "infrastructure/memoryCatalog.js": {
+    "layer": "infrastructure",
+    "ports": []
+  },
+  "infrastructure/memoryOrders.js": {
+    "layer": "infrastructure",
+    "ports": []
+  },
+  "application/placeOrder.js": {
+    "layer": "application",
+    "ports": [
+      "catalog",
+      "order",
+      "orders"
+    ]
+  },
+  "presentation/commandLine.js": {
+    "layer": "presentation",
+    "ports": [
+      "checkout"
+    ]
+  }
+}
