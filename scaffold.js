@@ -2,78 +2,69 @@
 
 const path = require('node:path');
 const { readFile } = require('node:fs/promises');
-const { watch } = require('node:fs');
-const { scaffold, starter } = require('./platform/scaffold.js');
+
+const { scaffold, starter } = require('./highscript/scaffold.js');
+
+const FLAGS = ['--json'];
+const SYNTAXES = ['js', 'lisp', 'md'];
+const usage = 'Usage: scaffold.js FILE [DIR] | --init DIR [js|lisp]';
+
+const writeWarnings = (error) => {
+  const warnings = Array.isArray(error.warnings) ? error.warnings : [];
+  for (const warning of warnings) {
+    console.warn(`WARN ${JSON.stringify(warning)}`);
+  }
+};
+
+const reportError = (error) => {
+  writeWarnings(error);
+  const message = error instanceof Error ? error.message : `${error}`;
+  console.error(message);
+  process.exitCode = 1;
+};
 
 const main = async () => {
   const input = process.argv.slice(2);
-  const watching = input.includes('--watch');
-  const machine = input.includes('--json');
-  const args = input.filter((arg) => !['--watch', '--json'].includes(arg));
-  const initialize = args[0] === '--init';
-  if (!args[0] || (initialize && (!args[1] || watching)) ||
-      args.length > (initialize ? 3 : 2)) {
-    throw new Error(
-      'Usage: scaffold.js FILE [DIR] [--watch] | --init DIR [js|lisp]',
-    );
+  const isMachine = input.includes('--json');
+  const args = input.filter((arg) => !FLAGS.includes(arg));
+  const file = args[0];
+  const dir = args[1];
+  const kind = args[2];
+  const isInitialize = file === '--init';
+  const limit = isInitialize ? 3 : 2;
+  if (!file || (isInitialize && !dir) || args.length > limit) {
+    throw new Error(usage);
   }
-  const syntax = initialize ? args[2] ?? 'js'
-    : path.extname(args[0]).slice(1);
-  if (!['js', 'lisp'].includes(syntax)) throw new Error('Expected js or lisp');
-  const sourceFile = initialize ? null : path.resolve(args[0]);
-  const root = initialize ? path.resolve(args[1])
-    : path.resolve(args[1] ?? path.dirname(sourceFile));
-  const run = async () => {
-    const source = initialize ? starter(syntax)
-      : await readFile(sourceFile, 'utf8');
-    const report = await scaffold({ source, syntax, root });
-    if (machine) {
-      process.stdout.write(`${JSON.stringify(report)}\n`);
-    } else {
-      for (const file of report.created) console.log(`CREATE ${file}`);
-      for (const file of report.updated) console.log(`UPDATE ${file}`);
-      for (const warning of report.warnings) {
-        console.warn(`WARN ${JSON.stringify(warning)}`);
-      }
-      console.log(`DONE ${report.created.length} created, ` +
-        `${report.warnings.length} warnings`);
-    }
-  };
-  if (!watching) return run();
-  let timer;
-  let queue = Promise.resolve();
-  const enqueue = () => {
-    queue = queue.then(run).catch((error) => {
-      for (const warning of error.warnings ?? []) {
-        console.warn(`WARN ${JSON.stringify(warning)}`);
-      }
-      console.error(error.message);
-    });
-  };
-  const watcher = watch(path.dirname(sourceFile), (event, name) => {
-    if (name && name.toString() !== path.basename(sourceFile)) return;
-    clearTimeout(timer);
-    timer = setTimeout(enqueue, 150);
-  });
-  const stop = async () => {
-    clearTimeout(timer);
-    watcher.close();
-    await queue;
-  };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
-  watcher.on('error', (error) => {
-    console.error(error.message);
-    process.exitCode = 1;
-    stop();
-  });
-  enqueue();
-};
-
-main().catch((error) => {
-  for (const warning of error.warnings ?? []) {
+  const extension = path.extname(file).slice(1);
+  const syntax = isInitialize ? kind || 'js' : extension;
+  if (!SYNTAXES.includes(syntax)) throw new Error('Expected js, lisp or md');
+  const sourceFile = isInitialize ? null : path.resolve(file);
+  const root = path.resolve(dir ?? path.dirname(sourceFile));
+  const source = isInitialize
+    ? starter(syntax)
+    : await readFile(sourceFile, 'utf8');
+  const report = await scaffold({ source, syntax, root });
+  if (isMachine) {
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    return;
+  }
+  for (const created of report.created) console.log(`CREATE ${created}`);
+  for (const updated of report.updated) console.log(`UPDATE ${updated}`);
+  for (const warning of report.warnings) {
     console.warn(`WARN ${JSON.stringify(warning)}`);
   }
-  console.error(error.message);
-  process.exitCode = 1;
+  const createdCount = report.created.length;
+  const warningCount = report.warnings.length;
+  console.log(`DONE ${createdCount} created, ${warningCount} warnings`);
+};
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught:', error);
+  process.exit(1);
 });
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+
+main().catch(reportError);

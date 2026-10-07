@@ -5,21 +5,56 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs/promises');
-const { execFile, spawn } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { once } = require('node:events');
-const { setTimeout: delay } = require('node:timers/promises');
-const { scaffold } = require('../platform/scaffold.js');
-const { parse } = require('../platform/syntax.js');
-const { compile } = require('../platform/wiring.js');
-const { capabilityPorts } = require('../platform/model.js');
+
+const { scaffold } = require('../highscript/scaffold.js');
+const { parse } = require('../highscript/syntax.js');
+const { compile } = require('../highscript/wiring.js');
+const { capabilityPorts } = require('../highscript/model.js');
 
 const execute = promisify(execFile);
+
+const QUOTE = String.fromCharCode(39);
+
 const project = path.resolve(__dirname, '..');
-const encode = (model) => `(${JSON.stringify(model, null, 2)
-  .replace(/"([A-Za-z][A-Za-z0-9]*)":/g, '$1:')});\n`;
+
+const linkRuntime = async (root) => {
+  const modules = path.join(root, 'node_modules');
+  await fs.symlink(path.join(project, 'node_modules'), modules);
+};
+
+const printValue = (value, pad) => {
+  if (typeof value === 'string') {
+    if (value.includes('.')) return value;
+    return JSON.stringify(value);
+  }
+  if (
+    value &&
+    typeof value.literal === 'string' &&
+    Object.keys(value).length === 1
+  ) {
+    return JSON.stringify(value.literal);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    const printed = (item) => {
+      const text = printValue(item, `${pad}  `);
+      return `${pad}  ${text}`;
+    };
+    const items = value.map(printed);
+    return `[\n${items.join(',\n')},\n${pad}]`;
+  }
+  const keys = Object.keys(value);
+  if (keys.length === 0) return '{}';
+  const fields = keys.map(
+    (key) => `${pad}  ${key}: ${printValue(value[key], `${pad}  `)}`,
+  );
+  return `{\n${fields.join(',\n')},\n${pad}}`;
+};
+const encode = (model) => `(${printValue(model, '')});\n`;
 const original = () =>
-  fs.readFile(path.join(project, 'architecture.js'), 'utf8');
+  fs.readFile(path.join(project, 'project.js'), 'utf8');
 const setup = async (context) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'ddd-scaffold-'));
   context.after(() => fs.rm(parent, { recursive: true, force: true }));
@@ -28,321 +63,346 @@ const setup = async (context) => {
 const apply = (root, source) => scaffold({ source, root, syntax: 'js' });
 const contents = (root, file) => fs.readFile(path.join(root, file), 'utf8');
 const exists = async (file) => {
-  try { await fs.access(file); return true; } catch (error) {
+  try {
+    await fs.access(file);
+    return true;
+  } catch (error) {
     if (error.code === 'ENOENT') return false;
     throw error;
   }
 };
-const addReporting = (model) => ({
-  ...model,
-  layers: {
-    ...model.layers,
-    reporting: {
-      summary: {
-        use: 'reportRenderer.js', bind: { aggregate: 'domain.aggregate' },
-      },
-    },
-  },
-  allow: { reporting: ['domain'] },
+const addSummary = (model) => {
+  const application = {
+    ...model.application,
+    summary: { aggregate: 'domain.orderAggregate' },
+  };
+  return { ...model, application };
+};
+
+const BOOTSTRAP_FILES = [
+  'package.json',
+  'main.js',
+  'scaffold.js',
+  'highscript/scaffold.js',
+  'architecture.cache.json',
+  'domain/orderAggregate.js',
+  'application/purchase.js',
+];
+
+const checkBootstrap = async (parent, syntax) => {
+  const source = await fs.readFile(
+    path.join(project, `project.${syntax}`),
+    'utf8',
+  );
+  const root = path.join(parent, syntax);
+  const report = await scaffold({ source, root, syntax });
+  assert.equal(report.warnings.length, 0);
+  for (const file of BOOTSTRAP_FILES) {
+    assert.equal(await exists(path.join(root, file)), true, file);
+  }
+  const purchaseFile = 'application/purchase.js';
+  const contract = path.join(root, `${purchaseFile}.contract.json`);
+  assert.equal(await exists(contract), false);
+  const purchase = await contents(root, purchaseFile);
+  assert.match(
+    purchase,
+    /const placeOrder = \(\{ catalog, order, orders \}\) =>/,
+  );
+  assert.match(purchase, /module\.exports = \{ placeOrder \};/);
+  assert.doesNotMatch(purchase, /@param|\/\*\*/);
+  const stored = JSON.parse(await contents(root, 'architecture.cache.json'));
+  const ports = stored[syntax].catalog['application/purchase.js'].ports;
+  assert.deepEqual(ports, ['catalog', 'order', 'orders']);
+  await linkRuntime(root);
+  const second = await execute(
+    process.execPath,
+    ['scaffold.js', `project.${syntax}`, '--json'],
+    { cwd: root },
+  );
+  assert.deepEqual(JSON.parse(second.stdout).created, []);
+  await assert.rejects(
+    execute(process.execPath, ['main.js', syntax, 'ORDER-001', 'book:1'], {
+      cwd: root,
+    }),
+    (error) => /Not implemented/.test(error.stderr),
+  );
+};
+
+// eslint-disable-next-line max-len
+test('both DSLs bootstrap complete projects without implementations', async (context) => {
+  const { parent } = await setup(context);
+  for (const syntax of ['js', 'lisp', 'md']) {
+    await checkBootstrap(parent, syntax);
+  }
 });
 
-test('both DSLs bootstrap complete projects without implementations',
-  async (context) => {
-    const { parent } = await setup(context);
-    for (const syntax of ['js', 'lisp']) {
-      const source = await fs.readFile(
-        path.join(project, `architecture.${syntax}`), 'utf8',
-      );
-      const root = path.join(parent, syntax);
-      const report = await scaffold({ source, root, syntax });
-      assert.equal(report.warnings.length, 0);
-      for (const file of ['package.json', 'main.js', 'scaffold.js',
-        'platform/scaffold.js', 'platform/catalog.generated.json',
-        'src/domain/orderAggregate.js',
-        'src/application/placeOrder.js']) {
-        assert.equal(await exists(path.join(root, file)), true, file);
-      }
-      assert.equal(await exists(path.join(root,
-        'src/application/placeOrder.js.contract.json')), false);
-      const purchase = await contents(root, 'src/application/placeOrder.js');
-      assert.match(purchase,
-        /const placeOrder = \(\{ catalog, order, orders \}\) =>/);
-      assert.match(purchase, /module\.exports = placeOrder;/);
-      assert.doesNotMatch(purchase, /@param|\/\*\*/);
-      const catalog = JSON.parse(await contents(root,
-        'platform/catalog.generated.json'));
-      assert.deepEqual(catalog['application/placeOrder.js'].ports,
-        ['catalog', 'order', 'orders']);
-      const second = await execute(process.execPath,
-        ['scaffold.js', `architecture.${syntax}`, '--json'], { cwd: root });
-      assert.deepEqual(JSON.parse(second.stdout).created, []);
-      await assert.rejects(execute(process.execPath,
-        ['main.js', syntax, 'ORDER-001', 'book:1'], { cwd: root }),
-      (error) => /Not implemented/.test(error.stderr));
-    }
-  });
+// eslint-disable-next-line max-len
+test('init starts from no architecture and creates empty DDD layers', async (context) => {
+  const { root } = await setup(context);
+  await execute(process.execPath, [
+    path.join(project, 'scaffold.js'),
+    '--init',
+    root,
+    'lisp',
+  ]);
+  assert.equal(await exists(path.join(root, 'project.lisp')), true);
+  for (const layer of [
+    'domain',
+    'application',
+    'infrastructure',
+    'presentation',
+  ]) {
+    assert.equal((await fs.stat(path.join(root, layer))).isDirectory(), true);
+  }
+  await linkRuntime(root);
+  const output = await execute(
+    process.execPath,
+    ['scaffold.js', 'project.lisp', '--json'],
+    { cwd: root },
+  );
+  assert.deepEqual(JSON.parse(output.stdout).updated, []);
+});
 
-test('init starts from no architecture and creates empty DDD layers',
-  async (context) => {
-    const { root } = await setup(context);
-    await execute(process.execPath,
-      [path.join(project, 'scaffold.js'), '--init', root, 'lisp']);
-    assert.equal(await exists(path.join(root, 'architecture.lisp')), true);
-    for (const layer of ['domain', 'application',
-      'infrastructure', 'presentation']) {
-      assert.equal((await fs.stat(path.join(root, 'src', layer)))
-        .isDirectory(), true);
-    }
-    const output = await execute(process.execPath,
-      ['scaffold.js', 'architecture.lisp', '--json'], { cwd: root });
-    assert.deepEqual(JSON.parse(output.stdout).updated, []);
-  });
+// eslint-disable-next-line max-len
+test('repeated runs preserve filled code and package files', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const file = 'domain/orderAggregate.js';
+  const code = [
+    `${QUOTE}use strict${QUOTE};`,
+    'const orderAggregate = () => ({ ready: true });',
+    'module.exports = { orderAggregate };',
+    '',
+  ].join('\n');
+  await fs.writeFile(path.join(root, file), code);
+  const packageFile = path.join(root, 'package.json');
+  await fs.writeFile(packageFile, '{"private":true,"custom":"keep"}');
+  const before = await fs.stat(path.join(root, file));
+  const report = await apply(root, source);
+  assert.deepEqual(report.created, []);
+  assert.deepEqual(report.updated, []);
+  assert.equal(await contents(root, file), code);
+  assert.equal(
+    await fs.readFile(packageFile, 'utf8'),
+    '{"private":true,"custom":"keep"}',
+  );
+  const after = await fs.stat(path.join(root, file));
+  assert.equal(after.mtimeMs, before.mtimeMs);
+});
 
-test('repeated runs preserve filled code and package files',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const file = 'src/domain/orderAggregate.js';
-    const code = "'use strict';\nmodule.exports = () => ({ ready: true });\n";
-    await fs.writeFile(path.join(root, file), code);
-    const packageFile = path.join(root, 'package.json');
-    await fs.writeFile(packageFile, '{"private":true,"custom":"keep"}');
-    const before = await fs.stat(path.join(root, file));
-    const report = await apply(root, source);
-    assert.deepEqual(report.created, []);
-    assert.deepEqual(report.updated, []);
-    assert.equal(await contents(root, file), code);
-    assert.equal(await fs.readFile(packageFile, 'utf8'),
-      '{"private":true,"custom":"keep"}');
-    const after = await fs.stat(path.join(root, file));
-    assert.equal(after.mtimeMs, before.mtimeMs);
-  });
+test('an unreachable component file is generated', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const model = addSummary(parse(source, 'js'));
+  const report = await apply(root, encode(model));
+  assert.ok(report.created.includes('application/summary.js'));
+  assert.ok(
+    report.warnings.some(
+      (warning) =>
+        warning.code === 'UNREACHABLE_COMPONENT' &&
+        warning.component === 'application.summary',
+    ),
+  );
+  const summaryFile = 'application/summary.js';
+  const renderer = await contents(root, summaryFile);
+  assert.match(renderer, /const summary = \(\{ aggregate \}\) =>/);
+  assert.match(renderer, /module\.exports = \{ summary \};/);
+  assert.doesNotMatch(renderer, /@param|\/\*\*/);
+  assert.equal(
+    await exists(path.join(root, `${summaryFile}.contract.json`)),
+    false,
+  );
+  const catalog = JSON.parse(await contents(root, 'architecture.cache.json')).js
+    .catalog;
+  assert.doesNotThrow(() => compile(model, catalog));
+});
 
-test('new layer, component and file are generated with explicit permissions',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const model = addReporting(parse(source, 'js'));
-    const report = await apply(root, encode(model));
-    assert.ok(report.created.includes('src/reporting/'));
-    assert.ok(report.created.includes('src/reporting/reportRenderer.js'));
-    assert.ok(report.warnings.some((warning) =>
-      warning.code === 'UNREACHABLE_COMPONENT' &&
-      warning.component === 'reporting.summary'));
-    const renderer = await contents(root,
-      'src/reporting/reportRenderer.js');
-    assert.match(renderer, /const reportRenderer = \(\{ aggregate \}\) =>/);
-    assert.match(renderer, /module\.exports = reportRenderer;/);
-    assert.doesNotMatch(renderer, /@param|\/\*\*/);
-    assert.equal(await exists(path.join(root,
-      'src/reporting/reportRenderer.js.contract.json')), false);
-    const catalog = JSON.parse(await contents(root,
-      'platform/catalog.generated.json'));
-    assert.doesNotThrow(() => compile(model, catalog));
-  });
+// eslint-disable-next-line max-len
+test('removal warns about component, layer and orphan code without deletion', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, encode(addSummary(parse(source, 'js'))));
+  const file = 'application/summary.js';
+  const body = `() => async () => ${QUOTE}user implementation${QUOTE}`;
+  const code = `module.exports = ${body};\n`;
+  await fs.writeFile(path.join(root, file), code);
+  const report = await apply(root, source);
+  const codes = ['COMPONENT_REMOVED', 'MODULE_REMOVED'];
+  for (const code of codes) {
+    assert.ok(report.warnings.some((warning) => warning.code === code));
+  }
+  assert.equal(await contents(root, file), code);
+  const again = await apply(root, source);
+  assert.ok(again.warnings.some((item) => item.code === 'MODULE_REMOVED'));
+});
 
-test('removal warns about component, layer and orphan code without deletion',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, encode(addReporting(parse(source, 'js'))));
-    const file = 'src/reporting/reportRenderer.js';
-    const code = "module.exports = () => async () => 'user implementation';\n";
-    await fs.writeFile(path.join(root, file), code);
-    const report = await apply(root, source);
-    const codes = ['COMPONENT_REMOVED', 'LAYER_REMOVED', 'MODULE_REMOVED'];
-    for (const code of codes) {
-      assert.ok(report.warnings.some((warning) => warning.code === code));
-    }
-    assert.equal(await contents(root, file), code);
-    const again = await apply(root, source);
-    assert.ok(again.warnings.some((item) => item.code === 'MODULE_REMOVED'));
-  });
+// eslint-disable-next-line max-len
+test('a new component creates its file and keeps existing modules', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const model = parse(source, 'js');
+  model.infrastructure.remoteCatalog = {};
+  const report = await apply(root, encode(model));
+  const created = 'infrastructure/remoteCatalog.js';
+  assert.ok(report.created.includes(created));
+  assert.equal(await exists(path.join(root, 'application/products.js')), true);
+});
 
-test('changing use preserves old implementation and adds the new module',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const model = parse(source, 'js');
-    model.layers.infrastructure.products.use = 'remoteCatalog.js';
-    const report = await apply(root, encode(model));
-    assert.ok(report.created.includes('src/infrastructure/remoteCatalog.js'));
-    assert.ok(report.warnings.some((item) => item.code === 'MODULE_REMOVED'));
-    assert.equal(await exists(path.join(root,
-      'src/infrastructure/memoryCatalog.js')), true);
-  });
+// eslint-disable-next-line max-len
+test('changed input roles warn without overwriting the existing factory', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const file = 'application/purchase.js';
+  const old = await contents(root, file);
+  const model = parse(source, 'js');
+  const purchase = model.application.purchase.placeOrder;
+  purchase.audit = 'domain.orderAggregate.create';
+  const report = await apply(root, encode(model));
+  assert.ok(report.warnings.some((item) => item.code === 'CONTRACT_CHANGED'));
+  assert.equal(await contents(root, file), old);
+  await fs.writeFile(
+    path.join(root, file),
+    old.replace(
+      '({ catalog, order, orders })',
+      '({ audit, catalog, order, orders })',
+    ),
+  );
+  const updated = await apply(root, encode(model));
+  assert.ok(!updated.warnings.some((item) => item.code === 'CONTRACT_CHANGED'));
+  const catalog = JSON.parse(await contents(root, 'architecture.cache.json')).js
+    .catalog;
+  assert.doesNotThrow(() => compile(model, catalog));
+});
 
-test('changed input roles warn without overwriting the existing factory',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const file = 'src/presentation/commandLine.js';
-    const old = await contents(root, file);
-    const model = parse(source, 'js');
-    model.layers.presentation.terminal.bind.audit = 'application.purchase';
-    const report = await apply(root, encode(model));
-    assert.ok(report.warnings.some((item) => item.code === 'CONTRACT_CHANGED'));
-    assert.equal(await contents(root, file), old);
-    await fs.writeFile(path.join(root, file),
-      old.replace('({ checkout })', '({ audit, checkout })'));
-    const updated = await apply(root, encode(model));
-    assert.ok(!updated.warnings.some((item) =>
-      item.code === 'CONTRACT_CHANGED'));
-    const catalog = JSON.parse(await contents(root,
-      'platform/catalog.generated.json'));
-    assert.doesNotThrow(() => compile(model, catalog));
-  });
+// eslint-disable-next-line max-len
+test('same filenames in different layers have separate physical modules', async (context) => {
+  const { root } = await setup(context);
+  const model = parse(await original(), 'js');
+  model.domain = { ...model.domain, products: {} };
+  await apply(root, encode(model));
+  const catalog = JSON.parse(await contents(root, 'architecture.cache.json')).js
+    .catalog;
+  assert.ok(catalog['domain/products.js']);
+  assert.ok(catalog['application/products.js']);
+});
 
-test('same filenames in different layers have separate physical modules',
-  async (context) => {
-    const { root } = await setup(context);
-    const model = parse(await original(), 'js');
-    model.layers.reporting = { archive: { use: 'memoryCatalog.js' } };
-    await apply(root, encode(model));
-    const catalog = JSON.parse(await contents(root,
-      'platform/catalog.generated.json'));
-    assert.ok(catalog['reporting/memoryCatalog.js']);
-    assert.ok(catalog['infrastructure/memoryCatalog.js']);
-  });
+test('bad references and cycles create no project', async (context) => {
+  const { root } = await setup(context);
+  const model = parse(await original(), 'js');
+  model.application.purchase.placeOrder.order = 'domain.absent';
+  await assert.rejects(apply(root, encode(model)), /Unknown reference/);
+  assert.equal(await exists(root), false);
+  model.application.purchase.placeOrder.order = 'application.purchase';
+  await assert.rejects(apply(root, encode(model)), /Dependency cycle/);
+  assert.equal(await exists(root), false);
+});
 
-test('bad references, cycles and path traversal create no project',
-  async (context) => {
-    const { root } = await setup(context);
-    const model = parse(await original(), 'js');
-    model.layers.domain.aggregate.use = '../escape.js';
-    await assert.rejects(apply(root, encode(model)), /filename/);
-    assert.equal(await exists(root), false);
-    model.layers.domain.aggregate.use = 'orderAggregate.js';
-    model.layers.application.purchase.bind.order = 'domain.absent';
-    await assert.rejects(apply(root, encode(model)), /Unknown reference/);
-    assert.equal(await exists(root), false);
-    model.layers.application.purchase.bind.order = 'application.purchase';
-    await assert.rejects(apply(root, encode(model)), /Dependency cycle/);
-    assert.equal(await exists(root), false);
-  });
+// eslint-disable-next-line max-len
+test('external source does not overwrite separately edited architecture', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const target = path.join(root, 'project.js');
+  const edited = `${source}\n`;
+  await fs.writeFile(target, edited);
+  const updated = encode(addSummary(parse(source, 'js')));
+  await assert.rejects(apply(root, updated), /Architecture conflict/);
+  assert.equal(await fs.readFile(target, 'utf8'), edited);
+});
 
-test('external source does not overwrite separately edited architecture',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const target = path.join(root, 'architecture.js');
-    const edited = `${source}\n`;
-    await fs.writeFile(target, edited);
-    const updated = encode(addReporting(parse(source, 'js')));
-    await assert.rejects(apply(root, updated), /Architecture conflict/);
-    assert.equal(await fs.readFile(target, 'utf8'), edited);
-  });
+// eslint-disable-next-line max-len
+test('concurrent writers and symlink directories are rejected', async (context) => {
+  const { root, parent } = await setup(context);
+  const source = await original();
+  await fs.mkdir(root);
+  const lock = path.join(root, '.scaffold.lock');
+  await fs.writeFile(lock, 'held');
+  await assert.rejects(apply(root, source), /already running/);
+  assert.equal(await fs.readFile(lock, 'utf8'), 'held');
+  await fs.unlink(lock);
+  const outside = path.join(parent, 'outside');
+  await fs.mkdir(outside);
+  await fs.symlink(outside, path.join(root, 'application'));
+  await assert.rejects(apply(root, source), /Expected directory/);
+  assert.deepEqual(await fs.readdir(outside), []);
+});
 
-test('concurrent writers and symlink directories are rejected',
-  async (context) => {
-    const { root, parent } = await setup(context);
-    const source = await original();
-    await fs.mkdir(root);
-    const lock = path.join(root, '.scaffold.lock');
-    await fs.writeFile(lock, 'held');
-    await assert.rejects(apply(root, source), /already running/);
-    assert.equal(await fs.readFile(lock, 'utf8'), 'held');
-    await fs.unlink(lock);
-    const outside = path.join(parent, 'outside');
-    await fs.mkdir(outside);
-    await fs.symlink(outside, path.join(root, 'src'));
-    await assert.rejects(apply(root, source), /Expected directory/);
-    assert.deepEqual(await fs.readdir(outside), []);
-  });
-
-test('Lisp allow and JS arrays normalize to the same policy', () => {
-  const lisp = '(architecture (layer presentation ' +
-    '(component terminal "commandLine.js")) (layer reporting) ' +
-    '(allow presentation reporting) (entry presentation.terminal))';
+test('Lisp and Markdown normalize to the same layers', () => {
+  const lisp = '(layer presentation\n  (terminal))\n(layer domain)\n';
+  const md = '- presentation\n  - terminal\n- domain\n';
   const model = parse(lisp, 'lisp');
   assert.deepEqual(parse(encode(model), 'js'), model);
-  assert.deepEqual(model.allow, { presentation: ['reporting'] });
+  assert.deepEqual(parse(md, 'md'), model);
+  assert.deepEqual(Object.keys(model).sort(), ['domain', 'presentation']);
 });
 
-test('watch regenerates from edited source without overlapping writes',
-  { timeout: 10000 }, async (context) => {
-    const { root, parent } = await setup(context);
-    const source = await original();
-    const input = path.join(parent, 'input.js');
-    await fs.writeFile(input, source);
-    const child = spawn(process.execPath,
-      [path.join(project, 'scaffold.js'), input, root, '--watch'],
-      { stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
-    let errors = '';
-    child.stdout.on('data', (chunk) => { output += chunk; });
-    child.stderr.on('data', (chunk) => { errors += chunk; });
-    const waitFor = async (predicate) => {
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if (predicate()) return;
-        await delay(30);
-      }
-      throw new Error(`Watch timed out: ${output}\n${errors}`);
-    };
-    try {
-      await waitFor(() => output.includes('DONE'));
-      await fs.writeFile(input, '({ layers:');
-      await waitFor(() => errors.includes('Expected'));
-      assert.equal(await contents(root, 'architecture.js'), source);
-      await fs.writeFile(input, encode(addReporting(parse(source, 'js'))));
-      await waitFor(() => output.includes('src/reporting/reportRenderer.js'));
-      assert.equal(await exists(path.join(root,
-        'src/reporting/reportRenderer.js')), true);
-    } finally {
-      const stopped = once(child, 'exit');
-      child.kill('SIGTERM');
-      await stopped;
-    }
+// eslint-disable-next-line max-len
+test('removing a referenced component warns and leaves the project intact', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const before = await contents(root, 'architecture.cache.json');
+  const model = parse(source, 'js');
+  delete model.domain.orderAggregate;
+  await assert.rejects(apply(root, encode(model)), (error) => {
+    assert.match(error.message, /Unknown reference/);
+    assert.ok(
+      error.warnings.some(
+        (item) =>
+          item.code === 'COMPONENT_REMOVED' &&
+          item.component === 'domain.orderAggregate',
+      ),
+    );
+    return true;
   });
-
-test('removing a referenced component warns and leaves the project intact',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const before = await contents(root, 'platform/catalog.generated.json');
-    const model = parse(source, 'js');
-    delete model.layers.domain.aggregate;
-    await assert.rejects(apply(root, encode(model)), (error) => {
-      assert.match(error.message, /Unknown reference/);
-      assert.ok(error.warnings.some((item) =>
-        item.code === 'COMPONENT_REMOVED' &&
-        item.component === 'domain.aggregate'));
-      return true;
-    });
-    const catalog = await contents(root, 'platform/catalog.generated.json');
-    assert.equal(catalog, before);
-    assert.equal(await contents(root, 'architecture.js'), source);
-    assert.equal(await exists(path.join(root,
-      'src/domain/orderAggregate.js')), true);
-  });
+  const catalog = await contents(root, 'architecture.cache.json');
+  assert.equal(catalog, before);
+  assert.equal(await contents(root, 'project.js'), source);
+  assert.equal(await exists(path.join(root, 'domain/orderAggregate.js')), true);
+});
 
 test('factory signatures expose capability names', () => {
-  const purchase = ({ order, catalog, orders }) => async (command) => command;
+  const purchase = ({ order, catalog, orders }) => {
+    const place = async (command) => {
+      const ready = command && order && catalog && orders;
+      return ready;
+    };
+    return place;
+  };
   assert.deepEqual(capabilityPorts(purchase), ['order', 'catalog', 'orders']);
-  assert.deepEqual(capabilityPorts(() => ({ ready: true })), []);
   assert.deepEqual(
-    capabilityPorts(async ({ checkout }) => checkout), ['checkout'],
+    capabilityPorts(() => ({ ready: true })),
+    [],
   );
-  assert.deepEqual(capabilityPorts(function aggregate() {}), []);
-  assert.throws(() => capabilityPorts((capabilities) => capabilities),
-    /Invalid capability signature/);
+  assert.deepEqual(
+    capabilityPorts(async ({ checkout }) => checkout),
+    ['checkout'],
+  );
+  assert.deepEqual(
+    capabilityPorts(() => {}),
+    [],
+  );
+  assert.throws(
+    () => capabilityPorts((capabilities) => capabilities),
+    /Invalid capability signature/,
+  );
 });
 
-test('a new component can reuse a module with the same input roles',
-  async (context) => {
-    const { root } = await setup(context);
-    const source = await original();
-    await apply(root, source);
-    const model = parse(source, 'js');
-    model.layers.infrastructure.backup = { use: 'memoryCatalog.js' };
-    const report = await apply(root, encode(model));
-    assert.deepEqual(report.created, []);
-    model.layers.infrastructure.backup.bind = { source: 'domain.aggregate' };
-    await assert.rejects(apply(root, encode(model)), /Conflicting module/);
-  });
+// eslint-disable-next-line max-len
+test('the same component name in another layer is a separate module', async (context) => {
+  const { root } = await setup(context);
+  const source = await original();
+  await apply(root, source);
+  const model = parse(source, 'js');
+  model.domain = {
+    ...model.domain,
+    products: { source: 'domain.orderAggregate' },
+  };
+  const report = await apply(root, encode(model));
+  assert.ok(report.created.includes('domain/products.js'));
+  assert.equal(await exists(path.join(root, 'application/products.js')), true);
+});
