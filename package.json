@@ -1,13 +1,28 @@
 {
-  "name": "ddd-wiring-example",
-  "version": "1.0.0",
+  "name": "highscript-prototype",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "node main.js js ORDER-001 book:2 pen:3",
+    "start": "node main.js js",
+    "start:js": "node main.js js ORDER-001 book:2 pen:3",
     "start:lisp": "node main.js lisp ORDER-001 book:2 pen:3",
+    "start:md": "node main.js md ORDER-001 book:2 pen:3",
+    "start:http": "node main.js js --http",
     "test": "node --test",
-    "scaffold": "node scaffold.js architecture.js",
-    "scaffold:lisp": "node scaffold.js architecture.lisp",
-    "watch": "node scaffold.js architecture.js --watch"
+    "scaffold": "node scaffold.js project.js",
+    "scaffold:js": "node scaffold.js project.js",
+    "scaffold:lisp": "node scaffold.js project.lisp",
+    "scaffold:md": "node scaffold.js project.md",
+    "lint": "eslint . && prettier -c \"**/*.js\" \"**/*.json\" \"**/*.md\"",
+    "fix": "eslint . --fix && prettier --write \"**/*.js\" \"**/*.json\" \"**/*.md\""
+  },
+  "devDependencies": {
+    "eslint": "^9.39.4",
+    "eslint-config-metarhia": "^9.1.9",
+    "metaskills": "^1.0.5",
+    "prettier": "^3.9.9"
+  },
+  "dependencies": {
+    "metautil": "^5.5.2"
   }
 }
