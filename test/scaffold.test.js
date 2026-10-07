@@ -10,6 +10,7 @@ const { promisify } = require('node:util');
 
 const { scaffold } = require('../highscript/scaffold.js');
 const { parse } = require('../highscript/syntax.js');
+const { format } = require('../highscript/format.js');
 const { compile } = require('../highscript/wiring.js');
 const { capabilityPorts } = require('../highscript/model.js');
 
@@ -24,37 +25,8 @@ const linkRuntime = async (root) => {
   await fs.symlink(path.join(project, 'node_modules'), modules);
 };
 
-const printValue = (value, pad) => {
-  if (typeof value === 'string') {
-    if (value.includes('.')) return value;
-    return JSON.stringify(value);
-  }
-  if (
-    value &&
-    typeof value.literal === 'string' &&
-    Object.keys(value).length === 1
-  ) {
-    return JSON.stringify(value.literal);
-  }
-  if (Array.isArray(value)) {
-    if (value.length === 0) return '[]';
-    const printed = (item) => {
-      const text = printValue(item, `${pad}  `);
-      return `${pad}  ${text}`;
-    };
-    const items = value.map(printed);
-    return `[\n${items.join(',\n')},\n${pad}]`;
-  }
-  const keys = Object.keys(value);
-  if (keys.length === 0) return '{}';
-  const fields = keys.map(
-    (key) => `${pad}  ${key}: ${printValue(value[key], `${pad}  `)}`,
-  );
-  return `{\n${fields.join(',\n')},\n${pad}}`;
-};
-const encode = (model) => `(${printValue(model, '')});\n`;
-const original = () =>
-  fs.readFile(path.join(project, 'project.js'), 'utf8');
+const encode = (model) => format(model, 'js');
+const original = () => fs.readFile(path.join(project, 'project.js'), 'utf8');
 const setup = async (context) => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'ddd-scaffold-'));
   context.after(() => fs.rm(parent, { recursive: true, force: true }));
@@ -71,6 +43,46 @@ const exists = async (file) => {
     throw error;
   }
 };
+
+test('scaffolding keeps every named capability', async (context) => {
+  const { root } = await setup(context);
+  const model = { presentation: { terminal: { run: {}, stop: {} } } };
+  await apply(root, encode(model));
+  const implementation = require(path.join(root, 'presentation/terminal.js'));
+  assert.deepEqual(Object.keys(implementation), ['run', 'stop']);
+  const cache = JSON.parse(await contents(root, 'architecture.cache.json'));
+  assert.deepEqual(cache.js.catalog['presentation/terminal.js'].exports, {
+    run: [],
+    stop: [],
+  });
+});
+
+test('standalone Markdown and synchronization', async (context) => {
+  const { parent, root } = await setup(context);
+  const markdown = path.join(parent, 'markdown');
+  await execute(process.execPath, [
+    path.join(project, 'scaffold.js'),
+    '--init',
+    markdown,
+    'md',
+  ]);
+  const initialized = parse(await contents(markdown, 'project.md'), 'md');
+  assert.deepEqual(initialized.presentation, { terminal: {} });
+  await apply(root, await original());
+  await linkRuntime(root);
+  await execute(process.execPath, ['sync.js'], { cwd: root });
+  const md = await contents(root, 'project.md');
+  await fs.writeFile(
+    path.join(root, 'project.md'),
+    md.replace('orderAggregate', 'differentAggregate'),
+  );
+  await assert.rejects(
+    execute(process.execPath, ['sync.js', '--check'], { cwd: root }),
+    (error) => /differs from project.js/.test(error.stderr),
+  );
+  await execute(process.execPath, ['sync.js'], { cwd: root });
+  await execute(process.execPath, ['sync.js', '--check'], { cwd: root });
+});
 const addSummary = (model) => {
   const application = {
     ...model.application,
@@ -111,7 +123,8 @@ const checkBootstrap = async (parent, syntax) => {
   assert.match(purchase, /module\.exports = \{ placeOrder \};/);
   assert.doesNotMatch(purchase, /@param|\/\*\*/);
   const stored = JSON.parse(await contents(root, 'architecture.cache.json'));
-  const ports = stored[syntax].catalog['application/purchase.js'].ports;
+  const ports =
+    stored[syntax].catalog['application/purchase.js'].exports.placeOrder;
   assert.deepEqual(ports, ['catalog', 'order', 'orders']);
   await linkRuntime(root);
   const second = await execute(
@@ -129,7 +142,7 @@ const checkBootstrap = async (parent, syntax) => {
 };
 
 // eslint-disable-next-line max-len
-test('both DSLs bootstrap complete projects without implementations', async (context) => {
+test('all syntaxes bootstrap projects without implementations', async (context) => {
   const { parent } = await setup(context);
   for (const syntax of ['js', 'lisp', 'md']) {
     await checkBootstrap(parent, syntax);
@@ -171,8 +184,8 @@ test('repeated runs preserve filled code and package files', async (context) => 
   const file = 'domain/orderAggregate.js';
   const code = [
     `${QUOTE}use strict${QUOTE};`,
-    'const orderAggregate = () => ({ ready: true });',
-    'module.exports = { orderAggregate };',
+    'const create = () => ({ ready: true });',
+    'module.exports = { create };',
     '',
   ].join('\n');
   await fs.writeFile(path.join(root, file), code);

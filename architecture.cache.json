@@ -1,155 +1,236 @@
 {
   "js": {
-    "version": 1,
+    "version": 2,
     "components": {
       "domain.orderAggregate": "domain/orderAggregate.js",
       "infrastructure.config": "infrastructure/config.js",
       "infrastructure.logger": "infrastructure/logger.js",
-      "application.products": "application/products.js",
-      "application.orders": "application/orders.js",
       "infrastructure.cli": "infrastructure/cli.js",
       "infrastructure.server": "infrastructure/server.js",
+      "application.products": "application/products.js",
+      "application.orders": "application/orders.js",
       "application.purchase": "application/purchase.js"
     },
     "catalog": {
       "domain/orderAggregate.js": {
         "layer": "domain",
-        "ports": []
+        "exports": {
+          "create": []
+        }
       },
       "infrastructure/config.js": {
         "layer": "infrastructure",
-        "ports": ["fileName"]
+        "exports": {
+          "read": [
+            "fileName"
+          ]
+        }
       },
       "infrastructure/logger.js": {
         "layer": "infrastructure",
-        "ports": ["fileName"]
-      },
-      "application/products.js": {
-        "layer": "application",
-        "ports": []
-      },
-      "application/orders.js": {
-        "layer": "application",
-        "ports": []
+        "exports": {
+          "open": [
+            "fileName"
+          ]
+        }
       },
       "infrastructure/cli.js": {
         "layer": "infrastructure",
-        "ports": []
+        "exports": {
+          "open": []
+        }
       },
       "infrastructure/server.js": {
         "layer": "infrastructure",
-        "ports": ["console", "options"]
+        "exports": {
+          "open": [
+            "console",
+            "options"
+          ]
+        }
+      },
+      "application/products.js": {
+        "layer": "application",
+        "exports": {
+          "ProductRepository": []
+        }
+      },
+      "application/orders.js": {
+        "layer": "application",
+        "exports": {
+          "OrderRepository": []
+        }
       },
       "application/purchase.js": {
         "layer": "application",
-        "ports": ["catalog", "order", "orders"]
+        "exports": {
+          "placeOrder": [
+            "catalog",
+            "order",
+            "orders"
+          ]
+        }
       }
     },
     "architecture": {
       "path": "project.js",
-      "hash": "18e4ddcee559d5f6d95dfcaf5b0b4e212d1197eb799cd1a480284be5800296bf"
+      "hash": "ebccedb1663fba22423a33f46a7b19327ceb0a65798cd42349dbd0f3b5b3fd04"
     }
   },
   "lisp": {
-    "version": 1,
+    "version": 2,
     "components": {
       "domain.orderAggregate": "domain/orderAggregate.js",
       "infrastructure.config": "infrastructure/config.js",
       "infrastructure.logger": "infrastructure/logger.js",
-      "application.products": "application/products.js",
-      "application.orders": "application/orders.js",
       "infrastructure.cli": "infrastructure/cli.js",
       "infrastructure.server": "infrastructure/server.js",
+      "application.products": "application/products.js",
+      "application.orders": "application/orders.js",
       "application.purchase": "application/purchase.js"
     },
     "catalog": {
       "domain/orderAggregate.js": {
         "layer": "domain",
-        "ports": []
+        "exports": {
+          "create": []
+        }
       },
       "infrastructure/config.js": {
         "layer": "infrastructure",
-        "ports": ["fileName"]
+        "exports": {
+          "read": [
+            "fileName"
+          ]
+        }
       },
       "infrastructure/logger.js": {
         "layer": "infrastructure",
-        "ports": ["fileName"]
-      },
-      "application/products.js": {
-        "layer": "application",
-        "ports": []
-      },
-      "application/orders.js": {
-        "layer": "application",
-        "ports": []
+        "exports": {
+          "open": [
+            "fileName"
+          ]
+        }
       },
       "infrastructure/cli.js": {
         "layer": "infrastructure",
-        "ports": []
+        "exports": {
+          "open": []
+        }
       },
       "infrastructure/server.js": {
         "layer": "infrastructure",
-        "ports": ["console", "options"]
+        "exports": {
+          "open": [
+            "console",
+            "options"
+          ]
+        }
+      },
+      "application/products.js": {
+        "layer": "application",
+        "exports": {
+          "ProductRepository": []
+        }
+      },
+      "application/orders.js": {
+        "layer": "application",
+        "exports": {
+          "OrderRepository": []
+        }
       },
       "application/purchase.js": {
         "layer": "application",
-        "ports": ["catalog", "order", "orders"]
+        "exports": {
+          "placeOrder": [
+            "catalog",
+            "order",
+            "orders"
+          ]
+        }
       }
     },
     "architecture": {
       "path": "project.lisp",
-      "hash": "4ea404423420dde6b476f3d7bd7825f8e2713abdbc7e85486bb65efb24f66860"
+      "hash": "20d855ee455b19e8419d2add159f9803c7aac7a73bc5ebac564af9ebaa3d0f24"
     }
   },
   "md": {
-    "version": 1,
+    "version": 2,
     "components": {
       "domain.orderAggregate": "domain/orderAggregate.js",
       "infrastructure.config": "infrastructure/config.js",
       "infrastructure.logger": "infrastructure/logger.js",
-      "application.products": "application/products.js",
-      "application.orders": "application/orders.js",
       "infrastructure.cli": "infrastructure/cli.js",
       "infrastructure.server": "infrastructure/server.js",
+      "application.products": "application/products.js",
+      "application.orders": "application/orders.js",
       "application.purchase": "application/purchase.js"
     },
     "catalog": {
       "domain/orderAggregate.js": {
         "layer": "domain",
-        "ports": []
+        "exports": {
+          "create": []
+        }
       },
       "infrastructure/config.js": {
         "layer": "infrastructure",
-        "ports": ["fileName"]
+        "exports": {
+          "read": [
+            "fileName"
+          ]
+        }
       },
       "infrastructure/logger.js": {
         "layer": "infrastructure",
-        "ports": ["fileName"]
-      },
-      "application/products.js": {
-        "layer": "application",
-        "ports": []
-      },
-      "application/orders.js": {
-        "layer": "application",
-        "ports": []
+        "exports": {
+          "open": [
+            "fileName"
+          ]
+        }
       },
       "infrastructure/cli.js": {
         "layer": "infrastructure",
-        "ports": []
+        "exports": {
+          "open": []
+        }
       },
       "infrastructure/server.js": {
         "layer": "infrastructure",
-        "ports": ["console", "options"]
+        "exports": {
+          "open": [
+            "console",
+            "options"
+          ]
+        }
+      },
+      "application/products.js": {
+        "layer": "application",
+        "exports": {
+          "ProductRepository": []
+        }
+      },
+      "application/orders.js": {
+        "layer": "application",
+        "exports": {
+          "OrderRepository": []
+        }
       },
       "application/purchase.js": {
         "layer": "application",
-        "ports": ["catalog", "order", "orders"]
+        "exports": {
+          "placeOrder": [
+            "catalog",
+            "order",
+            "orders"
+          ]
+        }
       }
     },
     "architecture": {
       "path": "project.md",
-      "hash": "309475e5843de9e984274a3e82744fadc2b1680a428aa537d54a466568d27d9f"
+      "hash": "b28a13d358728189f80cd632781e32d61aafd593f0316a570e32ae21564a8eb8"
     }
   }
 }

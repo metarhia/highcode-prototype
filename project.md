@@ -5,17 +5,15 @@
   - config
     - read
       - fileName "configuration.json"
-    - sections
   - logger
     - open
-      - fileName infrastructure.config.sections.log
-    - console
+      - fileName infrastructure.config.read.log
   - cli
     - open
   - server
     - open
-      - console infrastructure.logger.console
-      - options infrastructure.config.sections.server
+      - console infrastructure.logger.open
+      - options infrastructure.config.read.server
 - application
   - products
     - ProductRepository

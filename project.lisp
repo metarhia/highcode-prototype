@@ -1,28 +1,17 @@
-(layer domain
-  (orderAggregate
-    (create)))
+(layer domain (orderAggregate (create)))
 
 (layer infrastructure
-  (config
-    (read
-      (fileName "configuration.json"))
-    (sections))
-  (logger
-    (open
-      (fileName infrastructure.config.sections.log))
-    (console))
-  (cli
-    (open))
+  (config (read (fileName "configuration.json")))
+  (logger (open (fileName infrastructure.config.read.log)))
+  (cli (open))
   (server
     (open
-      (console infrastructure.logger.console)
-      (options infrastructure.config.sections.server))))
+      (console infrastructure.logger.open)
+      (options infrastructure.config.read.server))))
 
 (layer application
-  (products
-    (ProductRepository))
-  (orders
-    (OrderRepository))
+  (products (ProductRepository))
+  (orders (OrderRepository))
   (purchase
     (placeOrder
       (order domain.orderAggregate.create)
@@ -31,8 +20,7 @@
 
 (layer presentation
   (terminal
-    (infrastructure.cli.on "call"
-      ((order application.purchase.placeOrder))))
+    (infrastructure.cli.on "call" ((order application.purchase.placeOrder))))
   (api
     (infrastructure.server.on "call"
       ((order application.purchase.placeOrder)))))

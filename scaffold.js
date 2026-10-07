@@ -4,10 +4,9 @@ const path = require('node:path');
 const { readFile } = require('node:fs/promises');
 
 const { scaffold, starter } = require('./highscript/scaffold.js');
+const { SYNTAXES } = require('./highscript/syntax.js');
 
-const FLAGS = ['--json'];
-const SYNTAXES = ['js', 'lisp', 'md'];
-const usage = 'Usage: scaffold.js FILE [DIR] | --init DIR [js|lisp]';
+const usage = 'Usage: scaffold.js FILE [DIR] | --init DIR [js|lisp|md]';
 
 const writeWarnings = (error) => {
   const warnings = Array.isArray(error.warnings) ? error.warnings : [];
@@ -26,7 +25,7 @@ const reportError = (error) => {
 const main = async () => {
   const input = process.argv.slice(2);
   const isMachine = input.includes('--json');
-  const args = input.filter((arg) => !FLAGS.includes(arg));
+  const args = input.filter((arg) => arg !== '--json');
   const file = args[0];
   const dir = args[1];
   const kind = args[2];
@@ -57,14 +56,5 @@ const main = async () => {
   const warningCount = report.warnings.length;
   console.log(`DONE ${createdCount} created, ${warningCount} warnings`);
 };
-
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled rejection:', reason);
-});
 
 main().catch(reportError);

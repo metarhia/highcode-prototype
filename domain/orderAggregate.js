@@ -2,10 +2,9 @@
 
 const ID_PATTERN = /^[A-Z0-9-]{1,64}$/;
 
-const lineOf = (item, seen) => {
+const lineOf = (item) => {
   const { sku, quantity, priceCents } = item;
-  const isDuplicate = seen.has(sku);
-  const isValidSku = typeof sku === 'string' && sku !== '' && !isDuplicate;
+  const isValidSku = typeof sku === 'string' && sku !== '';
   if (!isValidSku) throw new Error('Invalid or duplicate SKU');
   const isValidQuantity = Number.isSafeInteger(quantity) && quantity >= 1;
   if (!isValidQuantity) {
@@ -13,7 +12,6 @@ const lineOf = (item, seen) => {
   }
   const isValidPrice = Number.isSafeInteger(priceCents) && priceCents >= 0;
   if (!isValidPrice) throw new Error('Invalid price');
-  seen.add(sku);
   const amountCents = quantity * priceCents;
   const isSafeAmount = Number.isSafeInteger(amountCents);
   if (!isSafeAmount) throw new Error('Line amount overflow');
@@ -28,9 +26,14 @@ const create = () => {
     if (!hasItems) throw new Error('Order must contain items');
     const seen = new Set();
     const lines = [];
-    for (const item of items) lines.push(lineOf(item, seen));
     let totalCents = 0;
-    for (const line of lines) totalCents += line.amountCents;
+    for (const item of items) {
+      const line = lineOf(item);
+      if (seen.has(line.sku)) throw new Error('Invalid or duplicate SKU');
+      seen.add(line.sku);
+      lines.push(line);
+      totalCents += line.amountCents;
+    }
     const isSafeTotal = Number.isSafeInteger(totalCents);
     if (!isSafeTotal) throw new Error('Order total overflow');
     return { id, status: 'placed', currency: 'USD', lines, totalCents };

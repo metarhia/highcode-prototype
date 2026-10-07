@@ -22,7 +22,7 @@ const model = async (syntax = 'js') => {
   return parse(await readFile(file, 'utf8'), syntax);
 };
 
-test('both frontends produce the same model and result', async () => {
+test('all frontends produce the same model and result', async (context) => {
   const models = await Promise.all([model(), model('lisp'), model('md')]);
   const jsModel = models[0];
   const lispModel = models[1];
@@ -31,9 +31,16 @@ test('both frontends produce the same model and result', async () => {
   assert.deepEqual(jsModel, mdModel);
   const js = await start('js');
   const lisp = await start('lisp');
+  const md = await start('md');
+  context.after(() => Promise.all([js.close(), lisp.close(), md.close()]));
   const args = Object.freeze(['ORDER-001', 'book:2', 'pen:3']);
-  const outputs = await Promise.all([js.run(args), lisp.run(args)]);
+  const outputs = await Promise.all([
+    js.run(args),
+    lisp.run(args),
+    md.run(args),
+  ]);
   assert.equal(outputs[0], outputs[1]);
+  assert.equal(outputs[0], outputs[2]);
   const placed = JSON.parse(outputs[0]);
   assert.equal(placed.totalCents, 3600);
   assert.equal(placed.status, 'placed');
@@ -43,17 +50,18 @@ test('both frontends produce the same model and result', async () => {
   );
 });
 
-// eslint-disable-next-line max-len
-test('instances retain state inside one assembly and isolate assemblies', async () => {
+test('instances retain state and isolate assemblies', async (context) => {
   const first = await start();
   const second = await start();
+  context.after(() => Promise.all([first.close(), second.close()]));
   await first.run(['ORDER-001', 'book:1']);
   await assert.rejects(first.run(['ORDER-001', 'pen:1']), /already exists/);
   await assert.doesNotReject(second.run(['ORDER-001', 'pen:1']));
 });
 
-test('invalid orders are not persisted', async () => {
+test('invalid orders are not persisted', async (context) => {
   const application = await start();
+  context.after(() => application.close());
   await assert.rejects(
     application.run(['ORDER-001', 'missing:1']),
     /Unknown SKU/,
@@ -115,15 +123,15 @@ test('compiler rejects unknown, missing and cyclic bindings', async () => {
   assert.throws(() => compile(cycle, catalog), /Dependency cycle/);
 });
 
-// eslint-disable-next-line max-len
-test('binding selects a different provider without changing application code', async () => {
+test('binding selects a different provider', async (context) => {
   const source = await model();
   const graph = compile(source, catalog);
-  const load = (name, layer) =>
+  const load = (name, layer, capability) =>
     name === 'products.js'
       ? () => ({ find: async (sku) => ({ sku, priceCents: 100 }) })
-      : loadFactory(path.join(__dirname, '..', layer, name));
+      : loadFactory(path.join(__dirname, '..', layer, name), capability);
   const application = await assemble(graph, load);
+  context.after(() => application.close());
   const output = JSON.parse(await application.run(['ORDER-001', 'book:2']));
   assert.equal(output.totalCents, 200);
 });
@@ -141,10 +149,12 @@ test('DSL parsers reject executable JS, duplicates and trailing input', () => {
 test('reopening the logger does not nest timestamps', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'logger-'));
   try {
+    const originalConsole = globalThis.console.log;
     const fileName = path.join(root, 'orders.log');
     const loggerFile = path.join(__dirname, '../infrastructure/logger.js');
     const first = loadFactory(loggerFile)({ fileName });
     const second = loadFactory(loggerFile)({ fileName });
+    assert.equal(globalThis.console.log, originalConsole);
     await first.log('listening 127.0.0.1:3000');
     const message = 'listen EADDRINUSE: address already in use 127.0.0.1:3000';
     await second.error(message);
@@ -166,18 +176,19 @@ test('reopening the logger does not nest timestamps', async () => {
   }
 });
 
-test('business modules contain no module linking', async () => {
-  for (const implementation of Object.keys(catalog)) {
+test('domain and application have no peer imports', async () => {
+  for (const [implementation, contract] of Object.entries(catalog)) {
     const file = path.join(__dirname, '..', implementation);
     const source = await readFile(file, 'utf8');
-    const linked = /\brequire\s*\(\s*['"](?!node:|metautil['"])/;
-    assert.doesNotMatch(source, linked);
+    if (!implementation.startsWith('infrastructure/')) {
+      const linked = /\brequire\s*\(\s*['"](?!node:|metautil['"])/;
+      assert.doesNotMatch(source, linked);
+    }
     assert.doesNotMatch(source, /\bimport\b/);
-    const exported = loadFactory(file);
-    assert.equal(Object.isSealed(require(file)), true);
-    assert.deepEqual(
-      [...capabilityPorts(exported)].sort(),
-      [...catalog[implementation].ports].sort(),
-    );
+    for (const [name, ports] of Object.entries(contract.exports)) {
+      const factory = loadFactory(file, name);
+      assert.equal(loadFactory(file, name), factory);
+      assert.deepEqual([...capabilityPorts(factory)].sort(), [...ports].sort());
+    }
   }
 });

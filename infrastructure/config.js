@@ -1,10 +1,9 @@
 'use strict';
 
 const { readFile } = require('node:fs/promises');
+const path = require('node:path');
 
 const { isHashObject } = require('metautil');
-
-const sections = {};
 
 const readText = async (fileName) => {
   try {
@@ -28,11 +27,8 @@ const parseSettings = (raw) => {
 };
 
 const read = async ({ fileName }) => {
-  const raw = await readText(fileName);
-  const settings = parseSettings(raw);
-  const stored = structuredClone(settings);
-  for (const key of Object.keys(stored)) sections[key] = stored[key];
-  return sections;
+  const raw = await readText(path.resolve(__dirname, '..', fileName));
+  return parseSettings(raw);
 };
 
 module.exports = { read };

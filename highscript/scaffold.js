@@ -7,24 +7,32 @@ const { createHash } = require('node:crypto');
 const { generateUUID, isHashObject } = require('metautil');
 
 const { parse } = require('./syntax.js');
-const { LAYERS, inspect, capabilityPorts } = require('./model.js');
-const { compile, loadFactory } = require('./wiring.js');
+const {
+  LAYERS,
+  inspect,
+  capabilities,
+  capabilityPorts,
+} = require('./model.js');
+const { compile, loadFactory, contractOf } = require('./wiring.js');
+const { format } = require('./format.js');
 
 const CACHE_FILE = 'architecture.cache.json';
 const TOOLING_FILES = [
   'main.js',
   'scaffold.js',
+  'sync.js',
   'highscript/start.js',
   'highscript/syntax.js',
   'highscript/model.js',
   'highscript/wiring.js',
+  'highscript/channel.js',
+  'highscript/format.js',
   'highscript/scaffold.js',
   'highscript/generated-readme.md',
 ];
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const hash = (value) => createHash('sha256').update(value).digest('hex');
-const roles = (value) => JSON.stringify(Object.keys(value).sort());
 const listed = (names) => JSON.stringify([...names].sort());
 
 const stat = async (file) => {
@@ -87,41 +95,24 @@ const writeGenerated = async (root, relative, content, report) => {
 };
 
 const renderTemplate = (node) => {
-  const names = Object.keys(node.bindings).sort();
-  const parameters = names.length === 0 ? '()' : `({ ${names.join(', ')} })`;
-  const factory = node.exportName || node.use.slice(0, -'.js'.length);
-  const implementation = node.implementation;
-  return `'use strict';
-
-const ${factory} = ${parameters} => {
-  const execute = async (input) => {
-    throw new Error('Not implemented: ${implementation}');
-  };
-  return execute;
-};
-
-module.exports = { ${factory} };
-`;
+  const factories = capabilities(node).map(([name, bindings]) => {
+    const roles = Object.keys(bindings).sort();
+    const parameters = roles.length ? `({ ${roles.join(', ')} })` : '()';
+    const factory = name ?? node.name;
+    const message = `Not implemented: ${node.implementation}#${factory}`;
+    const source = `const ${factory} = ${parameters} => {
+  throw new Error('${message}');
+};`;
+    return { name: factory, source };
+  });
+  const body = factories.map((factory) => factory.source).join('\n\n');
+  const names = factories.map((factory) => factory.name).join(', ');
+  return `'use strict';\n\n${body}\n\nmodule.exports = { ${names} };\n`;
 };
 
 const starter = (syntax) => {
-  if (syntax === 'lisp') {
-    return `(layer domain)
-(layer infrastructure)
-(layer application)
-(layer presentation
-  (terminal))
-`;
-  }
-  return `({
-  domain: {},
-  infrastructure: {},
-  application: {},
-  presentation: {
-    terminal: {},
-  },
-});
-`;
+  const model = Object.fromEntries(LAYERS.map((layer) => [layer, {}]));
+  return format({ ...model, presentation: { terminal: {} } }, syntax);
 };
 
 const scanOrphans = async (root, layers, modules, warnings) => {
@@ -152,28 +143,22 @@ const loadCache = async (root) => {
   return cache;
 };
 
-const moduleIndex = (description) => {
-  const modules = new Map();
-  for (const node of description.nodes) {
-    if (!node.implementation) continue;
-    const existing = modules.get(node.implementation);
-    const conflict =
-      existing && roles(existing.bindings) !== roles(node.bindings);
-    if (conflict) {
-      throw new Error(`Conflicting module contracts: ${node.implementation}`);
-    }
-    modules.set(node.implementation, node);
-  }
-  return modules;
-};
+const moduleIndex = ({ nodes }) =>
+  new Map(
+    nodes
+      .filter((node) => node.implementation)
+      .map((node) => [node.implementation, node]),
+  );
 
 const declarationsOf = (description) => {
   const declared = [];
   for (const node of description.nodes) {
     if (!node.implementation) continue;
-    const layer = node.layer;
-    const ports = Object.keys(node.bindings);
-    declared.push([node.implementation, { layer, ports }]);
+    const ports = capabilities(node).map(([name, bindings]) => [
+      name,
+      Object.keys(bindings),
+    ]);
+    declared.push([node.implementation, contractOf(node, ports)]);
   }
   return Object.fromEntries(declared);
 };
@@ -217,7 +202,7 @@ const openLock = async (lockPath) => {
 const previousState = (cache, syntax) => {
   const previous = Object.hasOwn(cache, syntax) ? cache[syntax] : null;
   const storedComponents = previous && previous.components;
-  const validVersion = previous && previous.version === 1;
+  const validVersion = previous && [1, 2].includes(previous.version);
   const validComponents = isHashObject(storedComponents);
   if (previous && (!validVersion || !validComponents)) {
     throw new Error('Invalid scaffold state');
@@ -241,10 +226,16 @@ const assertSource = async (root, syntax, source, previous) => {
 const measuredPorts = async (root, node) => {
   const implementation = node.implementation;
   const stored = await read(path.join(root, implementation));
-  if (stored === null) return Object.keys(node.bindings).sort();
   try {
-    const loaded = loadFactory(path.join(root, implementation));
-    return capabilityPorts(loaded);
+    return capabilities(node).map(([name, bindings], index) => {
+      const declared =
+        stored === null
+          ? Object.keys(bindings)
+          : capabilityPorts(
+              loadFactory(path.join(root, implementation), name, index === 0),
+            );
+      return [name, declared.sort()];
+    });
   } catch (error) {
     throw new Error(`${implementation}: ${error.message}`, { cause: error });
   }
@@ -254,13 +245,15 @@ const collectPorts = async (root, modules, report) => {
   const ports = new Map();
   for (const [implementation, node] of modules) {
     const declared = await measuredPorts(root, node);
-    ports.set(implementation, declared);
-    if (listed(declared) !== listed(Object.keys(node.bindings))) {
-      const expected = Object.keys(node.bindings).sort();
-      const actual = [...declared].sort();
+    ports.set(implementation, contractOf(node, declared));
+    for (const [name, actual] of declared) {
+      const bindings = name === undefined ? node.bindings : node.exports[name];
+      const expected = Object.keys(bindings).sort();
+      if (listed(actual) === listed(expected)) continue;
       report.warnings.push({
         code: 'CONTRACT_CHANGED',
         path: implementation,
+        capability: name,
         expected,
         actual,
       });
@@ -289,12 +282,7 @@ const writeModules = async (root, modules, ports, report) => {
   const catalog = {};
   for (const [implementation, node] of modules) {
     await create(root, implementation, renderTemplate(node), report);
-    const layer = node.layer;
-    const declared = [...ports.get(implementation)].sort();
-    Object.defineProperty(catalog, implementation, {
-      value: { layer, ports: declared },
-      enumerable: true,
-    });
+    catalog[implementation] = ports.get(implementation);
   }
   return catalog;
 };
@@ -308,6 +296,10 @@ const copyTooling = async (root, report) => {
 };
 
 const writeManifests = async (root, syntax, report) => {
+  const syncScripts =
+    syntax === 'js'
+      ? { sync: 'node sync.js', 'sync:check': 'node sync.js --check' }
+      : {};
   const packageJson = json({
     name: 'architecture-project',
     version: '1.0.0',
@@ -316,6 +308,7 @@ const writeManifests = async (root, syntax, report) => {
       start: `node main.js ${syntax}`,
       'start:http': `node main.js ${syntax} --http`,
       scaffold: `node scaffold.js project.${syntax}`,
+      ...syncScripts,
     },
     dependencies: {
       metautil: '^5.5.2',
@@ -349,7 +342,7 @@ const writeScaffold = async (job) => {
   await writeManifests(root, syntax, report);
   await writeGenerated(root, sourceName, source, report);
   cache[syntax] = {
-    version: 1,
+    version: 2,
     components,
     catalog,
     architecture: { path: sourceName, hash: hash(source) },

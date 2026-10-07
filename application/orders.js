@@ -11,8 +11,7 @@ class OrderRepository {
   async get(id) {
     const order = this.#records.get(id);
     if (!order) return null;
-    const snapshot = structuredClone(order);
-    return snapshot;
+    return structuredClone(order);
   }
 }
 

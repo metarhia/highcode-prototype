@@ -1,349 +1,268 @@
 # An architectural DSL example
 
-A working order-placement example on Node.js with four layers.
-The graph is written in JS, Lisp, or Markdown as `project.js`,
-`project.lisp`, or `project.md`. `highscript` wires capabilities,
-and the scaffolder creates the project structure and implementation stubs.
+A small order application whose assembly is described as data in a restricted
+JavaScript syntax. JS is the primary representation. Lisp and Markdown express
+the same model and are generated from it.
 
-## Working example
+The runtime combines procedural parsing, validation and composition with
+stateful repositories, a request channel and an HTTP server. Application and
+domain code receive capabilities through factories.
+
+## Run
+
+Tested with Node.js 24.19.0.
 
 ```sh
+npm ci
+npm test
+npm run lint
 node main.js js ORDER-001 book:2 pen:3
 node main.js lisp ORDER-001 book:2 pen:3
 node main.js md ORDER-001 book:2 pen:3
+```
+
+Every example returns a placed order worth 3600 USD cents. Repeated calls within
+one assembly share a store. Different assemblies have separate stores and
+transports.
+
+CLI execution does not bind an HTTP port. Start HTTP explicitly:
+
+```sh
 npm run start:http
-node --test
+curl -X POST http://127.0.0.1:3000/order \
+  -H 'content-type: application/json' \
+  -d '{"id":"ORDER-002","lines":[{"sku":"book","quantity":2}]}'
 ```
 
-Each of the three runs creates an order with status `placed` and a total of
-3600 USD cents. Each assembly owns a separate in-memory store.
-`npm run start:http` loads `project.js` and leaves the HTTP server listening.
+The server accepts POST commands at `/<method>`. Successful responses use
+`application/json`; errors use `text/plain`. Both content types are retained.
+Settings stay in [configuration.json](configuration.json). Relative
+configuration and log paths resolve from the project directory.
 
-## How to create a project from scratch
+## Architecture and implementations
 
-You can start without an architecture file:
-
-```sh
-node scaffold.js --init <path> lisp
-```
-
-This creates the four layer folders, an initial
-`project.lisp`, an entry module, `package.json`, `main.js`, and a
-standalone copy of `highscript`. Use `js` instead of `lisp`, or omit it and
-the file is `project.js`. After generation the project does not depend on
-this archive and contains its own `scaffold.js` command.
-
-If the architecture is already written, pass it as the source:
-
-```sh
-node scaffold.js project.lisp <path>
-node scaffold.js project.js <path>
-node scaffold.js project.md <path>
-```
-
-Every component that has an implementation gets a template, including
-components that cannot be reached from presentation. Business code from the
-demonstration application is not copied: you fill in the new implementations
-yourself. Templates throw `Not implemented` until the code is written.
-
-## Extend an existing project
-
-After changing the architecture, run the command next to it:
-
-```sh
-node scaffold.js project.lisp
-```
-
-For JS and Markdown, use the same command with `project.js` and
-`project.md`.
-
-A project uses one primary file. The three files in this repository exist so
-the frontends can be compared; they are not synchronized automatically.
-
-## What is created and what is kept
-
-- **New layer.** Creates `<layer>/`, even when the layer is empty.
-- **New component.** Creates `<layer>/<component>.js`.
-- **Same component name in another layer.** Creates a separate file in that layer.
-- **New bind roles on a filled-in module.** Emits `CONTRACT_CHANGED`; the code is kept.
-- **Component removed.** Emits `COMPONENT_REMOVED`.
-- **Implementation file no longer used.** Emits `MODULE_REMOVED`; the file is kept.
-- **Layer removed.** Emits `LAYER_REMOVED`; the folder and its contents are kept.
-- **Component unreachable from presentation.** Creates a stub and emits `UNREACHABLE_COMPONENT`.
-
-A subscription such as `presentation.terminal` is wiring only, so it does not
-create a file.
-
-Each run updates only the generated catalog and the scaffolding state in
-`highscript`. Existing implementations, runtime files, `README`, and
-`package.json` are not overwritten. A repeated run with no changes does not
-rewrite files. User code is never deleted, whatever the model change.
-
-Invalid references, unknown layers, conflicting contracts of a shared module,
-and cycles stop generation. Removing a component that is still referenced
-prints removal warnings and a reference error; previously created code and
-the catalog stay in place.
-
-Removed components are compared with the last successful model. Leftover
-files and folders are scanned separately, so warnings about them repeat until
-you decide what to do with them.
-
-## Architectural language
-
-`project.js`, `project.lisp`, and `project.md` are three writings
-of one graph. The layers are `domain`, `infrastructure`, `application`, and
-`presentation`.
-
-A component exports capabilities. A capability names the values it receives.
-A value is another capability (`domain.orderAggregate.create`), a field of one
-(`infrastructure.config.sections.log`), or a quoted literal
-(`'configuration.json'`). An empty capability takes no ports.
-
-References are bare identifiers. A quoted string is a literal, not a reference.
-The text is data: comments, string escaping, computation, and arbitrary
-execution are not part of the syntax. The JS form also accepts arrays,
-`true`, `false`, and `null`. The only call is `source.on(event, handlers)`.
-
-### JavaScript
-
-The file is one parenthesized object and a semicolon. It is not executed.
-
-```js
-({
-  infrastructure: {
-    config: {
-      read: { fileName: 'configuration.json' },
-      sections: {},
-    },
-    logger: {
-      open: { fileName: infrastructure.config.sections.log },
-      console: {},
-    },
-  },
-  application: {
-    purchase: {
-      placeOrder: {
-        order: domain.orderAggregate.create,
-        catalog: application.products.ProductRepository,
-        orders: application.orders.OrderRepository,
-      },
-    },
-  },
-  presentation: {
-    terminal: infrastructure.cli.on('call', {
-      order: application.purchase.placeOrder,
-    }),
-  },
-});
-```
-
-### Lisp
-
-```lisp
-(layer infrastructure
-  (config
-    (read
-      (fileName "configuration.json"))
-    (sections))
-  (logger
-    (open
-      (fileName infrastructure.config.sections.log))
-    (console)))
-
-(layer application
-  (purchase
-    (placeOrder
-      (order domain.orderAggregate.create)
-      (catalog application.products.ProductRepository)
-      (orders application.orders.OrderRepository))))
-
-(layer presentation
-  (terminal
-    (infrastructure.cli.on "call"
-      ((order application.purchase.placeOrder)))))
-```
-
-### Markdown
-
-```md
-- infrastructure
-  - config
-    - read
-      - fileName "configuration.json"
-    - sections
-  - logger
-    - open
-      - fileName infrastructure.config.sections.log
-    - console
-- application
-  - purchase
-    - placeOrder
-      - order domain.orderAggregate.create
-      - catalog application.products.ProductRepository
-      - orders application.orders.OrderRepository
-- presentation
-  - terminal
-    - infrastructure.cli.on "call"
-      - order application.purchase.placeOrder
-```
-
-`terminal` and `api` subscribe to the `call` event. `infrastructure.cli`
-exposes `on` and `run`, and that `run` becomes the program entry. `api`
-subscribes `infrastructure.server` the same way. Neither entry has an
-implementation file. The complete graphs are `project.js`,
-`project.lisp`, and `project.md`.
-
-## A new component
-
-Add a capability to an existing layer. In `project.lisp`:
-
-```lisp
-(layer application
-  (summary
-    (report
-      (aggregate domain.orderAggregate.create))))
-```
-
-In JS the same component is a capability object:
+[project.js](project.js) contains the working graph. Its four layers are
+`domain`, `infrastructure`, `application` and `presentation`.
+A component normally maps to `<layer>/<component>.js`.
 
 ```js
 application: {
-  summary: {
-    report: { aggregate: domain.orderAggregate.create },
+  purchase: {
+    placeOrder: {
+      order: domain.orderAggregate.create,
+      catalog: application.products.ProductRepository,
+      orders: application.orders.OrderRepository,
+    },
   },
 },
 ```
 
-In Markdown it is a nested list:
-
-```md
-- application
-  - summary
-    - report
-      - aggregate domain.orderAggregate.create
-```
-
-Scaffolding then creates `application/summary.js`. The factory
-template declares input roles in its signature:
+`placeOrder` selects an actual module export. Its properties describe the
+ports supplied to that factory:
 
 ```js
-'use strict';
-
-const report = ({ aggregate }) => {
-  const execute = async (input) => {
-    throw new Error('Not implemented: application/summary.js');
+const placeOrder = ({ order, catalog, orders }) => {
+  const execute = async (command) => {
+    // Use the supplied capabilities.
   };
   return execute;
 };
 
-module.exports = { report };
-```
-
-Nothing in presentation references `summary` yet, so `UNREACHABLE_COMPONENT`
-is expected. To wire `report` in, add a direct reference from a consumer that
-presentation reaches, then extend that factory's signature and its code. The
-scaffolder deliberately does not invent a new use case for the capability.
-
-## Signatures and the catalog
-
-An implementation file is named after its component:
-`<layer>/<component>.js`. The registry uses that path, such as
-`application/products.js`, so the same component name may appear in different
-layers and still be a different module.
-
-The capability name in the architecture selects the export (`placeOrder`,
-`create`, `open`, `read`, `ProductRepository`). A factory's input roles are
-the names in the destructuring of its first argument. The scaffolder loads
-the module and reads those names from the result of `toString`. A class
-without a `constructor` takes no ports and is constructed with `new`. There
-is no separate contract file. Empty parentheses mean no ports:
-
-```js
-const placeOrder =
-  ({ order, catalog, orders }) =>
-  async (command) => {};
-
 module.exports = { placeOrder };
 ```
 
-```js
-class Catalog {}
+Arrow factories may return values or promises. Class exports are constructed
+with `new`. Every declared capability in a reachable component is constructed
+once per assembly. Two named capabilities are independent factory results;
+one is never silently substituted for another.
 
-module.exports = { Catalog };
+A factory signature uses no parameters or one destructured object containing
+plain port names. Renaming, defaults and nested parameter patterns are outside
+the current signature reader. Classes without an explicit constructor have no
+inferred ports. Domain and application modules do not import their peers.
+Infrastructure may import the shared platform channel.
+
+| Reference                             | Resolution                             |
+| ------------------------------------- | -------------------------------------- |
+| `application.purchase.placeOrder`     | Result of the named factory            |
+| `infrastructure.config.read.server`   | Field of the configuration result      |
+| `infrastructure.cli`                  | The component's sole capability result |
+| A component with several capabilities | Object keyed by capability name        |
+
+References may continue through nested fields. Method references retain their
+receiver, including class methods using private fields. Missing capabilities
+fail explicitly. Component dependency cycles are rejected, including references
+between factories inside the same component.
+
+An empty component or a flat port map also remains supported. For those forms,
+the loader selects `init`, `create`, `open`, the module basename, or the sole
+function export. Named capabilities are preferable when the choice matters.
+
+## Requests and subscriptions
+
+The implemented event notation is:
+
+```js
+presentation: {
+  terminal: infrastructure.cli.on('call', {
+    order: application.purchase.placeOrder,
+  }),
+  api: infrastructure.server.on('call', {
+    order: application.purchase.placeOrder,
+  }),
+},
 ```
 
-Names in the signature must be short identifiers, with no renaming and no
-default values. Ports in the demonstration example mean:
+This is parsed data, not a JavaScript method call executed while loading the
+declaration. At assembly time the runtime connects the transport and handlers.
 
-| Port     | Value shape                                          |
-| -------- | ---------------------------------------------------- |
-| order    | Object with `place(draft)`, which creates an Order   |
-| catalog  | Object with asynchronous `find(sku)`                 |
-| orders   | Object with asynchronous `save(order)` and `get(id)` |
-| fileName | String path                                          |
-| console  | Logger methods                                       |
-| options  | Server host and port                                 |
+The shared `Channel` implements request routing. A method map receives
+`{ method, parameters }` and invokes the matching own-property handler with
+`parameters`. A direct handler receives the whole event payload:
 
-The scaffolder does not overwrite an existing implementation. If the `bind`
-set has changed, compare `expected` and `actual` in `CONTRACT_CHANGED`, extend
-the factory signature, then run generation again. Until the roles match, the
-runtime rejects the mismatch. Changing only the target of an existing role
-does not require a signature edit.
+```js
+terminal: infrastructure.cli.on('call', application.dispatch.execute),
+```
 
-The catalog and the state of the previous assembly live in
-`architecture.cache.json` next to the `project.*` files. The file's keys
-are `js`, `lisp`, and `md`. The scaffolder builds each record from the active
-architecture and the names in signatures. You do not add implementations by
-hand. Cache files belong to the generator; keep them with the sources, and do
-not edit them.
+Handlers can return promises. The first matching registration supplies the
+result; this is not broadcast delivery. Errors propagate to the caller.
+Subscriptions return an unsubscribe callback. The assembly owns its callbacks
+and releases them during cleanup.
 
-## Runtime and layers
+The CLI and HTTP routes above share the same `placeOrder` result and repository.
+No presentation implementation files are necessary.
 
-| Component             | Implementation                        |
-| --------------------- | ------------------------------------- |
-| domain.orderAggregate | domain/orderAggregate.js              |
-| infrastructure.config | infrastructure/config.js              |
-| infrastructure.logger | infrastructure/logger.js              |
-| infrastructure.cli    | infrastructure/cli.js                 |
-| infrastructure.server | infrastructure/server.js              |
-| application.products  | application/products.js               |
-| application.orders    | application/orders.js                 |
-| application.purchase  | application/purchase.js               |
-| presentation.terminal | subscription on infrastructure.cli    |
-| presentation.api      | subscription on infrastructure.server |
+## Sequential composition
 
-Domain checks the invariants of the Order aggregate. Application coordinates
-price lookup, order creation, and saving. Infrastructure reads
-`configuration.json`, writes the log, parses CLI arguments, and serves HTTP.
-Presentation only subscribes handlers to those channels.
+A component can be an array of callable references:
 
-The application's modules do not import one another. The runtime passes each
-factory the declared capabilities; the DSL chooses the concrete providers.
+```js
+presentation: {
+  terminal: [
+    process.argv,
+    application.arguments.parse,
+    application.purchase.placeOrder,
+    application.output.format,
+  ],
+},
+```
 
-A reference in the architecture is the dependency. There is no separate
-allow-list. Cycles remain forbidden. Presentation components are entry
-points: they are wired even when nothing references them, and they stay
-alive.
+This illustrative pipeline requires those additional modules. Each step awaits
+the previous result and receives it as its sole argument. An error stops the
+sequence. The optional `process.argv` marker identifies input supplied to
+`application.run(args)`; it does not read global process state. Method maps can
+also dispatch a pipeline input. A subscription is a standalone component or a
+single-element array, not a pipeline mixed with further steps.
 
-Before startup the whole graph is checked, including unused components.
-Components unreachable from presentation produce a warning. Each component
-with an implementation has its own instance per assembly; two components that
-share one implementation file still get two factory instances.
+The working order example uses the CLI adapter to parse arguments. Parallel
+composition is a proposal, not an implemented operator.
 
-## Further notes
+## Syntax and synchronization
 
-If the source lies outside the target folder, it is copied to
-`project.<syntax>`. Later runs update that copy until it has been edited
-on its own. A conflict prints `Architecture conflict` and does not overwrite
-files. Editing the local file yourself is the normal workflow.
+The JS file is one parenthesized object followed by a semicolon. Bare names are
+references. Quoted strings are literal values, even when they contain dots.
 
-Factories are synchronous; capability operations may be asynchronous. The
-demonstration store is in memory. User files are kept by creating only the
-files that are missing; generated JSON is updated by replacing the whole
-file. A run interrupted by a process crash can be repeated after the leftover
-lock is removed. The project is not updated as one file transaction.
+All three representations support objects, arrays, strings with JSON escapes,
+finite numbers, booleans and null. JS additionally accepts comments and trailing
+commas. Only the two-argument `.on(event, handler)` call form is interpreted.
+Imports, arbitrary expressions and executable callbacks are not supported.
 
-25 tests cover the order scenario, the three syntaxes, creation from scratch,
-a repeated run, preservation of code, new layers and modules, removals,
-changes to input roles, isolation of assemblies, and protection against
-conflicting writes.
+Lisp uses `(layer ...)` forms. Nested port values use `(object ...)` and
+`(array ...)`; pipelines use `(pipe ...)`. Markdown uses the corresponding
+two-space nested lists. See [project.lisp](project.lisp) and
+[project.md](project.md).
+
+```sh
+npm run sync
+npm run sync:check
+```
+
+Edit `project.js`, then run `sync` to regenerate the two representations.
+`sync:check` compares parsed models, ignoring formatting differences.
+`npm test` runs this check before the tests. The generator verifies that each
+representation round-trips to the JS model.
+
+Standalone projects can instead choose Lisp or Markdown as their source and
+run that frontend directly. The JS synchronization command should only be used
+when JS is the chosen source.
+
+## Lifetime
+
+```js
+const { start } = require('./highscript/start.js');
+
+const main = async () => {
+  const application = await start('js');
+  try {
+    const result = await application.run(['ORDER-001', 'book:1']);
+    process.stdout.write(result);
+  } finally {
+    await application.close();
+  }
+};
+
+main().catch(console.error);
+```
+
+Assembly creates and connects components. `listen()` starts presentation
+transports that expose a listening operation and returns their addresses.
+Binding errors reject startup. `close()` releases subscriptions and resources
+in reverse acquisition order and is idempotent. Cleanup continues after a
+disposal failure and reports an `AggregateError`.
+
+Failed assembly or startup cleans up resources already acquired. A factory
+that fails before returning a resource must clean up its own partial work.
+The HTTP adapter closes active connections; request draining is not implemented.
+The command-line entry handles SIGINT and SIGTERM in HTTP mode.
+
+The logger writes through its injected instance, serializes file appends and
+flushes them on close. It does not replace global console methods.
+Normal assembly uses the CommonJS cache; factories own instance state.
+
+## Scaffolding
+
+```sh
+node scaffold.js --init ./new-project js
+node scaffold.js --init ./new-project-md md
+node scaffold.js project.js ./new-project
+node scaffold.js project.js
+```
+
+JS, Lisp and Markdown are supported, including initialization from an empty
+project. The generated project contains its own runtime and scaffolder.
+Install its dependencies before running it.
+
+Scaffolding creates missing layer folders and implementation files, including
+unreachable components. Each named capability gets a factory stub that throws
+`Not implemented`. Existing implementations and project files are preserved.
+
+| Change                | Result                                            |
+| --------------------- | ------------------------------------------------- |
+| Changed port names    | `CONTRACT_CHANGED` with expected and actual names |
+| Removed component     | `COMPONENT_REMOVED`                               |
+| Orphan implementation | `MODULE_REMOVED`; file is kept                    |
+| Removed layer         | `LAYER_REMOVED`; folder is kept                   |
+| Unreachable component | `UNREACHABLE_COMPONENT`; stub is still created    |
+
+Unknown references and cycles stop generation. Independently edited target
+architecture files are not overwritten. A lock prevents simultaneous writers;
+generated files are replaced individually, not as a project-wide transaction.
+Existing runtime files are not upgraded automatically.
+
+`architecture.cache.json` records the last successful scaffold and per-export
+contracts. Version 1 state can be migrated by scaffolding. Startup does not
+depend on this cache: it checks the current declarations against the current
+factories. Factory inspection loads trusted implementation modules; the DSL
+parser itself does not evaluate JavaScript.
+
+## Scope and review
+
+The current DSL handles component wiring, named factories, request routing,
+sequential pipelines and state owned by each assembly. Layer names and module
+paths follow conventions. Modular architecture files, explicit entry selection,
+schema validation, parallel execution and worker placement are not implemented.
+
+[changes.md](changes.md) records the refactoring and verification.
+[proposals.md](proposals.md) compares four alternative event constructions and
+proposes further architectural features. Proposed syntax is not accepted by
+the current runtime.
